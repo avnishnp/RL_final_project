@@ -1,4 +1,4 @@
-from __future__ import print_function
+# from __future__ import print_function
 
 import argparse
 import os
@@ -58,29 +58,29 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='A3C')
 
     #Set Training Lengths
-    parser.add_argument('--env-name', default='BreakoutDeterministic-v4', help='environment to train on')
-    parser.add_argument('--no-shared', default=False, help='use an optimizer without shared momentum.')
+    parser.add_argument('--env-name', default='Breakout-v4')
+    parser.add_argument('--no-shared', default=False)
     parser.add_argument('--run-base-case', type=lambda x: x.lower() == 'true', default=True)    
-    parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--seed', type=int, default=1)
 
 
-    parser.add_argument('--max-episode-length', type=int, default=100000, help='max length of an episode')
-    parser.add_argument('--max-episodes', type=int, default=500, help='max episodes for training')
-    parser.add_argument('--max-steps', type=int, default=20000000, help='max steps for training')
+    parser.add_argument('--max-episode-length', type=int, default=100000)
+    parser.add_argument('--max-episodes', type=int, default=500)
+    parser.add_argument('--max-steps', type=int, default=20000000)
 
-    parser.add_argument('--num-processes', type=int, default=8, help='number of training processes')
+    parser.add_argument('--num-processes', type=int, default=8)
 
 
     # Tuning Arguments
-    parser.add_argument('--lr', type=float, default=0.0001, help='learning rate')
-    parser.add_argument('--entropy-coef', type=float, default=0.15, help='entropy term coefficient')
-    parser.add_argument('--num-steps', type=int, default=80, help='forward steps in A3C')
-    parser.add_argument('--max-grad-norm', type=float, default=5, help='max gradient norm')
+    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--entropy-coef', type=float, default=0.15)
+    parser.add_argument('--num-steps', type=int, default=80)
+    parser.add_argument('--max-grad-norm', type=float, default=5)
 
     # Extra Arguments
-    parser.add_argument('--gamma', type=float, default=0.99, help='discount factor for rewards')
-    parser.add_argument('--gae-lambda', type=float, default=1.00, help='lambda parameter for GAE')
-    parser.add_argument('--value-loss-coef', type=float, default=0.5, help='value loss coefficient')
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--gae-lambda', type=float, default=1.00)
+    parser.add_argument('--value-loss-coef', type=float, default=0.5)
 
 
 
@@ -129,7 +129,7 @@ if __name__ == '__main__':
         optimizer = None
     else:
         optimizer = Adam(shared_model.parameters(), lr=args.lr)
-        optimizer.share_memory()
+        optimizer.global_memory()
 
 
     # Run Base Configuration

@@ -9,177 +9,156 @@ from Environments import DownScale_42, Normalize
 
 
 from A3C_Model import ActorCritic
-def ensure_shared_grads(model, shared_model):
-    for param, shared_param in zip(model.parameters(),
-                                   shared_model.parameters()):
-        if shared_param.grad is not None:
-            return
-        shared_param._grad = param.grad
 
-
-def train(rank, args, shared_model, counter, lock, optimizer=None, 
-          shared_rewards = None, shared_steps=None, shared_policy_losses=None, 
-          shared_value_losses=None, shared_entropies = None, episode_counter = None):
+        
+        
+def train(worker_id, config, net, step_tracker, access_lock, opt=None, 
+            ep_rewards=None, ep_steps=None, pol_losses=None, val_losses=None, 
+            pol_entropies=None, ep_counter=None):
     """
     Training function for asynchronous advantage actor-critic (A3C).
-    
-    Args:
-        rank (int): Process rank for multiprocessing.
-        args: Configuration and hyperparameters.
-        shared_model: Global model shared across processes.
-        counter: Global counter for total steps.
-        lock: Multiprocessing lock for shared memory access.
-        optimizer: Optimizer for model updates.
-        shared_rewards, shared_steps, shared_policy_losses, shared_value_losses, shared_entropies: 
-            Shared lists for tracking performance statistics.
-        episode_counter: Global counter for completed episodes.
     """
-    torch.manual_seed(args.seed + rank)
+    # Seed setup for reproducibility
+    torch.manual_seed(config.seed + worker_id)
 
-    # Preprocess Environemnt and intiialize
-    env = gym.make(args.env_name)
-    env = DownScale_42(env)
-    env = Normalize(env)
-    env.seed(args.seed + rank)
+    # Initialize the environment
+    game_env = gym.make(config.env_name)
+    game_env = DownScale_42(game_env)
+    game_env = Normalize(game_env)
+    game_env.seed(config.seed + worker_id)
 
+    # Setup model and optimizer
+    worker_net = ActorCritic(game_env.observation_space.shape[0], game_env.action_space)
+    if opt is None:
+        opt = optim.Adam(net.parameters(), lr=config.lr)
 
-    # Initialize local model and optimizer
-    model = ActorCritic(env.observation_space.shape[0], env.action_space)
+    worker_net.train()
 
-    if optimizer is None:
-        optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
+    # Reset environment and tracking variables
+    obs, info = game_env.reset()
+    obs = torch.from_numpy(obs)
+    is_done = True
 
-    model.train()
-
-    # Reset environment and initialize tracking variables
-    state, info = env.reset()
-    state = torch.from_numpy(state)
-    done = True
-
-    episode_length = 0
-    total_reward = 0
-    total_entropy = 0
-    policy_loss_value = 0
-    value_loss_value = 0
+    ep_len = 0
+    cum_reward = 0
+    entropy_sum = 0
+    policy_loss_val = 0
+    value_loss_val = 0
     
     while True:
-        # Check Termination
-        with lock:
-            if episode_counter.value >= args.max_episodes or counter.value >= args.max_steps:
-                if episode_counter.value >= args.max_episodes: print("Episode Limit Reached!")
-                if counter.value >= args.max_steps: print("Step Limit Reached!")
+        # Termination check
+        with access_lock:
+            if ep_counter.value >= config.max_episodes or step_tracker.value >= config.max_steps:
+                if ep_counter.value >= config.max_episodes: print("Episode Limit Reached!")
+                if step_tracker.value >= config.max_steps: print("Step Limit Reached!")
                 break
         
-        # Sync with the shared model
-        model.load_state_dict(shared_model.state_dict())
-        if done:
-            cx = torch.zeros(1, 256)
-            hx = torch.zeros(1, 256)
-            if episode_length > 0:  # Avoid logging for the first iteration
-                if shared_rewards is not None and shared_steps is not None:
-                    with lock:
-                        shared_rewards.append(total_reward)  # Store episode reward
-                        shared_steps.append(counter.value)
-                        if shared_policy_losses is not None and shared_value_losses is not None:
-                            shared_policy_losses.append(policy_loss.item())  # Store policy loss
-                            shared_value_losses.append(value_loss.item())
-                        if shared_entropies is not None:
-                            shared_entropies.append(float(total_entropy / episode_length))
-                  
-                  
-                # Reset episode statistics
-                total_reward = 0
-                episode_length = 0
-                total_entropy = 0
-                policy_loss_value = 0
-                value_loss_value = 0
+        # Sync the worker model with the global model
+        worker_net.load_state_dict(net.state_dict())
+        
+        if is_done:
+            mem_c = torch.zeros(1, 256)
+            mem_h = torch.zeros(1, 256)
+            if ep_len > 0:
+                if ep_rewards is not None and ep_steps is not None:
+                    with access_lock:
+                        ep_rewards.append(cum_reward)
+                        ep_steps.append(step_tracker.value)
+                        
+                        if pol_losses is not None and val_losses is not None:
+                            pol_losses.append(policy_loss.item())
+                            val_losses.append(value_loss.item())
+
+                        if pol_entropies is not None:
+                            pol_entropies.append(float(entropy_sum / ep_len))
+                        
+                cum_reward = 0
+                ep_len = 0
+                entropy_sum = 0
+                policy_loss_val = 0
+                value_loss_val = 0
                 
-                with lock:
-                    episode_counter.value += 1
-                    if episode_counter.value % 10 == 0:  # Print every 10 episodes
-                        print(f"Total episodes completed: {episode_counter.value}", flush = True)
+                with access_lock:
+                    ep_counter.value += 1
+                    if ep_counter.value % 10 == 0:
+                        print(f"Completed Episodes: {ep_counter.value}", flush=True)
         else:
-            cx = cx.detach()
-            hx = hx.detach()
+            mem_c = mem_c.detach()
+            mem_h = mem_h.detach()
 
-        values = []
-        log_probs = []
-        rewards = []
-        entropies = []
+        val_preds, logs_probs, reward_logs, entropy_logs = [], [], [], []
 
-        for step in range(args.num_steps):
-            episode_length += 1
+        for t in range(config.num_steps):
+            ep_len += 1
 
             # Forward pass through the model
-            value, logit, (hx, cx) = model((state.unsqueeze(0), (hx, cx)))
-            
-            # Compute action and log probabilities
-            action_prob = F.softmax(logit, dim=-1)
-            log_prob = F.log_softmax(logit, dim=-1)
-            
-            # Compute policy entropy for exploration regularization
-            entropy = -(log_prob * action_prob).sum(1, keepdim=True)
-            entropies.append(entropy.item())
-            total_entropy += entropy.item()
+            pred_val, logit_out, (mem_h, mem_c) = worker_net((obs.unsqueeze(0), (mem_h, mem_c)))
 
-            # Sample Action and relvant log probability
+            # Action and probability computations
+            action_prob = F.softmax(logit_out, dim=-1)
+            log_act_prob = F.log_softmax(logit_out, dim=-1)
+
+            # Entropy calculation for exploration
+            entropy_val = -(log_act_prob * action_prob).sum(1, keepdim=True)
+            entropy_logs.append(entropy_val.item())
+            entropy_sum += entropy_val.item()
+
+            # Sample an action
             action = action_prob.multinomial(num_samples=1).detach()
-            log_prob = log_prob.gather(1, action)
+            log_act_prob = log_act_prob.gather(1, action)
 
-            # Take Action
-            state, reward, terminated, truncated, info = env.step(action.item())
-            done = terminated or truncated or episode_length >= args.max_episode_length
+            # Take action in the environment
+            obs, reward, done_signal, truncated, info = game_env.step(action.item())
+            is_done = done_signal or truncated or ep_len >= config.max_episode_length
 
-            # state = torch.from_numpy(state)  
-            # done = done or episode_length >= args.max_episode_length
             reward = max(min(reward, 1), -1)
-            
-            total_reward += reward
+            cum_reward += reward
 
-            with lock:
-                counter.value += 1
+            with access_lock:
+                step_tracker.value += 1
 
-            if done:
-                # episode_length = 0
-                state, info = env.reset()
+            if is_done:
+                obs, info = game_env.reset()
 
-            state = torch.from_numpy(state)
-            values.append(value)
-            log_probs.append(log_prob)
-            rewards.append(reward)
+            obs = torch.from_numpy(obs)
+            val_preds.append(pred_val)
+            logs_probs.append(log_act_prob)
+            reward_logs.append(reward)
 
-            if done:
+            if is_done:
                 break
 
-        # Compute final value for bootstrapping
-        R = torch.zeros(1, 1)
-        if not done:
-            value, _, _ = model((state.unsqueeze(0), (hx, cx)))
-            R = value.detach()
+        # Bootstrap value
+        future_val = torch.zeros(1, 1)
+        if not is_done:
+            pred_val, _, _ = worker_net((obs.unsqueeze(0), (mem_h, mem_c)))
+            future_val = pred_val.detach()
 
-        values.append(R)
-        policy_loss = 0
-        value_loss = 0
+        val_preds.append(future_val)
+        policy_loss, value_loss, gae_val = 0, 0, torch.zeros(1, 1)
+
+        # Compute loss using Generalized Advantage Estimation (GAE)
+        for i in reversed(range(len(reward_logs))):
+            future_val = config.gamma * future_val + reward_logs[i]
+            adv_val = future_val - val_preds[i]
+            value_loss += 0.5 * adv_val.pow(2)
+
+            # Temporal difference error
+            td_error = reward_logs[i] + config.gamma * val_preds[i + 1] - val_preds[i]
+            gae_val = gae_val * config.gamma * config.gae_lambda + td_error
+
+            policy_loss -= logs_probs[i] * gae_val.detach() + config.entropy_coef * entropy_logs[i]
+
+        # Backpropagation and gradient updates
+        opt.zero_grad()
+        (policy_loss + config.value_loss_coef * value_loss).backward()
+        torch.nn.utils.clip_grad_norm_(worker_net.parameters(), config.max_grad_norm)
+
+        # Sync gradients with the shared model
+        for local_param, shared_param in zip(worker_net.parameters(), net.parameters()):
+            if shared_param.grad is None:
+                shared_param._grad = local_param.grad
         
-        # Generalized Advantage Estimation (GAE)
-        gae = torch.zeros(1, 1)
-        
-        # Compute expected return and advantage
-        for i in reversed(range(len(rewards))):
-            R = args.gamma * R + rewards[i]
-            advantage = R - values[i]
-            value_loss = value_loss + 0.5 * advantage.pow(2)
+        opt.step()
 
-            # Generalized Advantage Estimation
-            gae = gae * args.gamma * args.gae_lambda + (rewards[i] + args.gamma * values[i + 1] - values[i])
 
-            policy_loss = policy_loss - log_probs[i] * gae.detach() - args.entropy_coef * entropies[i]
-
-        # Backpropagation and gradient clipping
-        optimizer.zero_grad()
-        (policy_loss + args.value_loss_coef * value_loss).backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-
-        # Synchronize gradients with the shared model
-        ensure_shared_grads(model, shared_model)
-        optimizer.step()

@@ -43,10 +43,10 @@ class DownScale_42(gym.ObservationWrapper):
         super(DownScale_42, self).__init__(env)
         self.observation_space = Box(0.0, 1.0, [1, 42, 42])
 
-    def observation(self, observation):
+    def observation(self, obs):
     
         # resize by half
-        frame = observation[34:34 + 160, :160]
+        frame = obs[34:34 + 160, :160]
         frame = cv2.resize(frame, (80, 80))
         # downscale to 42 x 42
         frame = cv2.resize(frame, (42, 42))

@@ -25,7 +25,7 @@ Reinforcement learning (RL) is a technique used to train intelligent agents to s
 
 ## Usage
 
-- Run the PPO.ipynb notebook to train and evaluate PPO on Atari Breakout and Pong.
+- Run the PPO.ipynb notebook to train PPO on Atari Breakout and Pong.
 - For A3C, go to the A3C/ folder and run Main_Script.py file.
 - If the user wants to modify the hyperparameters or training length, these are accessible through arguments.
 

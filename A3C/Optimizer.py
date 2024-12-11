@@ -23,9 +23,7 @@ def init_weights(layer):
 
 
 class Adam(optim.Adam):
-    """Implements Adam algorithm with shared states.
-    """
-
+    
     def __init__(self,
                  params,
                  lr=1e-3,
@@ -43,7 +41,7 @@ class Adam(optim.Adam):
                 
                 state['step'] = torch.zeros(1)
                 
-    def share_memory(self):
+    def global_memory(self):
         for x in self.param_groups:
             for p in x['params']:
                 state = self.state[p]
@@ -59,7 +57,7 @@ class Adam(optim.Adam):
         Performs a single optimization step.
 
         Args:
-            compute_loss (callable, optional): Function to compute the loss.
+            compute_loss: Function to compute the loss.
 
         Returns:
             The computed loss, if applicable.
